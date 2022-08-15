@@ -92,11 +92,20 @@ def save_eval_meta(eval_dir, num_bpd_rounds, eval_meta, ckpt, bpd_round_id, rng:
     keep=1,
     prefix=f"meta_{jax.host_id()}_", overwrite=True)
 
+def randomize_tiles_shuffle_blocks(a, M, N, key):    
+    m,n,p = a.shape
+    b = a.reshape(m//M,M,n//N,N, p).swapaxes(1,2).reshape(-1,M*N, p)
+    b = jax.random.permutation(key, b)
+    return b.reshape(m//M,n//N,M,N,p).swapaxes(1,2).reshape(a.shape)
+
+randomize_tiles_shuffle_blocks_batch = jax.vmap(randomize_tiles_shuffle_blocks, (0, None, None, 0))
+
 def evaluate_bpd(
       config,
       workdir,
       eval_folder="eval",
-      deq_folder="flowpp_dequantizer"):
+      deq_folder="flowpp_dequantizer",
+      block_shuffle=0):
   """Evaluate trained models.
 
   Args:
@@ -212,7 +221,14 @@ def evaluate_bpd(
         if tf.io.gfile.exists(bpd_npz_path):
           continue
         batch = next(bpd_iter)
-        eval_batch = jtu.tree_map(lambda x: scaler(x._numpy()), batch)
+        batch['image'] = batch['image'].numpy()
+        batch['label'] = batch['label'].numpy()
+        if block_shuffle > 0:
+          logging.info("Block shuffling ...")
+          rng, *perm_rng = jax.random.split(rng, batch['image'].shape[1] + 1)
+          batch['image'] = randomize_tiles_shuffle_blocks_batch(batch['image'][0], block_shuffle, block_shuffle, jnp.array(perm_rng))
+          batch['image'] = batch['image'][None, ...]
+        eval_batch = jtu.tree_map(lambda x: scaler(x), batch)
         if config.eval.dequantizer:
           rng, step_rng = jax.random.split(rng)
           data = eval_batch['image']
@@ -224,6 +240,8 @@ def evaluate_bpd(
           bpd_d = bpd_d / dim
         else:
           data = eval_batch['image']
+        
+
 
         rng, *step_rng = jax.random.split(rng, jax.local_device_count() + 1)
         step_rng = jnp.asarray(step_rng)
@@ -258,6 +276,7 @@ config_flags.DEFINE_config_file(
   "config", None, "Training configuration.", lock_config=True)
 flags.DEFINE_string("workdir", None, "Work directory.")
 flags.DEFINE_enum("mode", None, ["train", "eval", "train_deq"], "Running mode: train or eval")
+flags.DEFINE_integer("block_shuffle", 0, "Block shuffle image")
 flags.DEFINE_string("eval_folder", "eval_test_bpd",
                     "The folder name for storing evaluation results")
 flags.DEFINE_string("deq_folder", "flowpp_dequantizer", "The folder name for dequantizer training.")
@@ -268,7 +287,7 @@ def main(argv):
   tf.config.experimental.set_visible_devices([], "GPU")
   os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
   # os.environ['XLA_FLAGS']='--xla_gpu_strict_conv_algorithm_picker=false'
-  evaluate_bpd(FLAGS.config, FLAGS.workdir, FLAGS.eval_folder, FLAGS.deq_folder)
+  evaluate_bpd(FLAGS.config, FLAGS.workdir, FLAGS.eval_folder, FLAGS.deq_folder, block_shuffle=FLAGS.block_shuffle)
 
 if __name__ == "__main__":
   app.run(main)
