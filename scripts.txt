@@ -1,0 +1,2 @@
+python bpd_eval.py --config configs/subvp/svhn_ddpmpp_continuous.py --mode eval --workdir outs/cifar10_subvp_likelihood_tw --eval_folder eval_svhn_server
+python bpd_eval_shuffle.py --config configs/subvp/svhn_ddpmpp_continuous.py --mode eval --workdir outs/cifar10_subvp_likelihood_tw --block_shuffle 8 --eval_folder eval_svhn_server_shuffle
