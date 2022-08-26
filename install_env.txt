@@ -1,0 +1,6 @@
+conda install -c conda-forge cudatoolkit=11.6 cudnn=8.2.0
+mkdir -p $CONDA_PREFIX/etc/conda/activate.d
+echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib/' > $CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
+pip install tensorflow
+pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+pip install flax absl-py ml-collections tensorflow-gan tensorflow-datasets
