@@ -27,13 +27,25 @@ import jax
 import numpy as np
 from flax.training import checkpoints
 from utils import batch_mul
+import optax
 
 
 # The dataclass that stores all training states
 @flax.struct.dataclass
 class State:
   step: int
-  optimizer: flax.optim.Optimizer
+  params: Any
+  opt_state: optax.OptState
+  lr: float
+  model_state: Any
+  ema_rate: float
+  params_ema: Any
+  rng: Any
+
+@flax.struct.dataclass
+class OldState:
+  step: int
+  optimizer: optax.GradientTransformation
   lr: float
   model_state: Any
   ema_rate: float
@@ -44,7 +56,7 @@ class State:
 @flax.struct.dataclass
 class DeqState:
   step: int
-  optimizer: flax.optim.Optimizer
+  optimizer: optax.GradientTransformation
   lr: float
   ema_rate: float
   params_ema: Any

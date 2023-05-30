@@ -26,12 +26,15 @@ from utils import batch_mul, get_div_fn, get_value_div_fn
 import functools
 import numpy as np
 from bound_likelihood import get_likelihood_offset_fn
+import optax
 
 
 def get_optimizer(config, beta2=0.999):
   """Returns a flax optimizer object based on `config`."""
   if config.optim.optimizer == 'Adam':
-    optimizer = flax.optim.Adam(beta1=config.optim.beta1, beta2=beta2, eps=config.optim.eps,
+    # optimizer = optax.adamw(learning_rate=config.optim.lr, b1=config.optim.beta1, b2=beta2, eps=config.optim.eps,
+    #                             weight_decay=config.optim.weight_decay)
+    optimizer = optax.inject_hyperparams(optax.adamw)(learning_rate=config.optim.lr, b1=config.optim.beta1, b2=beta2, eps=config.optim.eps,
                                 weight_decay=config.optim.weight_decay)
   else:
     raise NotImplementedError(
@@ -40,7 +43,7 @@ def get_optimizer(config, beta2=0.999):
   return optimizer
 
 
-def optimization_manager(config, deq_score_joint=False):
+def optimization_manager(config, optimizer: optax.GradientTransformation, deq_score_joint=False):
   """Returns an optimize_fn based on `config`."""
 
   def optimize_fn(state,
@@ -60,7 +63,8 @@ def optimization_manager(config, deq_score_joint=False):
         lambda x: x * grad_clip / jnp.maximum(grad_norm, grad_clip), grad)
     else:  # disabling gradient clipping if grad_clip < 0
       clipped_grad = grad
-    return state.optimizer.apply_gradient(clipped_grad, learning_rate=lr)
+    state.opt_state.hyperparams['learning_rate'] = lr
+    return optimizer.update(clipped_grad, state.opt_state, state.params)
 
   def optimize_deq_score_fn(state,
                             grad,
@@ -215,20 +219,22 @@ def get_step_fn(sde, model, train, optimize_fn=None, reduce_mean=False, continuo
     rng, step_rng = jax.random.split(rng)
     grad_fn = jax.value_and_grad(loss_fn, argnums=1, has_aux=True)
     if train:
-      params = state.optimizer.target
+      params = state.params
       states = state.model_state
       (loss, new_model_state), grad = grad_fn(step_rng, params, states, batch)
 
       grad = jax.lax.pmean(grad, axis_name='batch')
-      new_optimizer = optimize_fn(state, grad)
-      new_params_ema = jax.tree_multimap(
+      updates, opt_state = optimize_fn(state, grad)
+      new_params = optax.apply_updates(state.params, updates)
+      new_params_ema = jax.tree_util.tree_map(
         lambda p_ema, p: p_ema * state.ema_rate + p * (1. - state.ema_rate),
-        state.params_ema, new_optimizer.target
+        state.params_ema, new_params
       )
       step = state.step + 1
       new_state = state.replace(
         step=step,
-        optimizer=new_optimizer,
+        params=new_params,
+        opt_state = opt_state,
         model_state=new_model_state,
         params_ema=new_params_ema
       )

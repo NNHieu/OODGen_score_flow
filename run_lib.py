@@ -99,8 +99,9 @@ def train(config, workdir):
   # Initialize model.
   rng, step_rng = jax.random.split(rng)
   score_model, init_model_state, initial_params = mutils.init_model(step_rng, config)
-  optimizer = losses.get_optimizer(config).create(initial_params)
-  state = mutils.State(step=0, optimizer=optimizer, lr=config.optim.lr,
+  tx = losses.get_optimizer(config)
+  opt_state = tx.init(initial_params)
+  state = mutils.State(step=0, params=initial_params, opt_state=opt_state, lr=config.optim.lr,
                        model_state=init_model_state,
                        ema_rate=config.model.ema_rate,
                        params_ema=initial_params,
@@ -119,7 +120,7 @@ def train(config, workdir):
   rng = state.rng
 
   # Build one-step training and evaluation functions
-  optimize_fn = losses.optimization_manager(config)
+  optimize_fn = losses.optimization_manager(config, tx)
   continuous = config.training.continuous
   reduce_mean = config.training.reduce_mean
   likelihood_weighting = config.training.likelihood_weighting

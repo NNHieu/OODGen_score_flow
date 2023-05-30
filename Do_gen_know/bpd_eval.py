@@ -185,6 +185,14 @@ def evaluate_bpd(
   else:
     likelihood_fn = likelihood.get_likelihood_fn(sde, score_model, inverse_scaler, eps=config.training.smallest_time)
 
+  @jax.pmap
+  def drift_fn(state, x, t):
+    """The drift function of the reverse-time SDE."""
+    score_fn = mutils.get_score_fn(sde, score_model, state.params_ema, state.model_state, train=False, continuous=True)
+    # Probability flow ODE is a special case of Reverse SDE
+    rsde = sde.reverse(score_fn, probability_flow=True)
+    return rsde.sde(x, t)[0]
+
   # Create different random states for different hosts in a multi-host environment (e.g., TPU pods)
   rng = jax.random.fold_in(rng, jax.host_id())
 
@@ -245,10 +253,14 @@ def evaluate_bpd(
 
         rng, *step_rng = jax.random.split(rng, jax.local_device_count() + 1)
         step_rng = jnp.asarray(step_rng)
-        bpd = likelihood_fn(step_rng, pstate, data)[0]
-        if config.eval.dequantizer:
-          bpd = bpd + bpd_d
-        bpd = bpd.reshape(-1)
+        # bpd = likelihood_fn(step_rng, pstate, data)[0]
+        drift = drift_fn(pstate, data,  sampling_eps*jnp.ones((data.shape[0]*data.shape[1],)))
+        drift = drift.reshape((data.shape[0]*data.shape[1], -1))
+        bpd = jnp.linalg.norm(drift, axis=1)
+
+        # if config.eval.dequantizer:
+        #   bpd = bpd + bpd_d
+        # bpd = bpd.reshape(-1)
         bpds.extend(bpd)
         logging.info(
           "ckpt: %d, repeat: %d, batch: %d, mean bpd: %6f" % (ckpt, repeat, batch_id, jnp.mean(jnp.asarray(bpds))))
